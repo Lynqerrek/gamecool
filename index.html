@@ -1,15 +1,14 @@
 <!--
-Top-down 2D HTML game (single file)
-Place this file in your GitHub repo (branch: main) as index.html.
-Add your player sprite as: ./PlayerModel.png (same folder as this file).
-Open index.html in a browser (or use GitHub Pages) to run.
+Top-down 2D HTML game (single file) — Updated
+Features (this version):
+- WASD movement
+- Player rotates to face the mouse cursor
+- Camera is locked to the player's center (player stays in the middle)
+- World objects (trees, crates, rocks) for movement reference
+- Player sprite loaded from ./PlayerModel.png
+- Drag & drop to replace player sprite for quick testing
 
-Features (updated):
-- WASD-only movement (primary control)
-- Simple world objects (trees, crates, rocks) so you can see movement
-- Smooth camera that follows the player (with lerp)
-- Player sprite loaded from PlayerModel.png
-- Drag & drop replacement for quick testing
+Place this file in your GitHub repo (branch: main) as index.html and add PlayerModel.png next to it.
 -->
 
 <!doctype html>
@@ -17,20 +16,19 @@ Features (updated):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Top-down 2D Game (WASD + World Objects)</title>
+  <title>Top-down 2D Game (WASD + Face Cursor + Centered Camera)</title>
   <style>
     html,body{height:100%;margin:0;background:#0e1724;color:#ddd;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
     #game-container{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px}
     canvas{background:#1b2b3a;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.6)}
     .ui{max-width:900px;width:100%;display:flex;justify-content:space-between;align-items:center}
     .panel{background:rgba(255,255,255,0.03);padding:8px 12px;border-radius:6px;font-size:13px}
-    a{color:#8cd3ff}
   </style>
 </head>
 <body>
   <div id="game-container">
     <div class="ui" style="width:100%;max-width:900px">
-      <div class="panel">Use <strong>W A S D</strong> to move — Camera top-down follow</div>
+      <div class="panel">Use <strong>W A S D</strong> to move — Player faces the mouse cursor — Camera centered on player</div>
       <div class="panel">Player sprite: <code>PlayerModel.png</code></div>
     </div>
     <canvas id="game" width="900" height="600"></canvas>
@@ -61,7 +59,6 @@ class InputHandler {
   _normalize(k){
     if(!k) return null;
     k = k.toLowerCase();
-    // Only WASD supported per your request
     if(k === 'w') return 'up';
     if(k === 's') return 'down';
     if(k === 'a') return 'left';
@@ -73,11 +70,12 @@ class InputHandler {
 
 // ------------------------ Camera ------------------------
 class Camera{
+  // viewW/viewH are in CSS pixels (canvas client size)
   constructor(viewW, viewH, worldW, worldH){
     this.viewW = viewW; this.viewH = viewH;
     this.worldW = worldW; this.worldH = worldH;
-    this.x = viewW/2; this.y = viewH/2; // center of camera in world coords
-    this.lerpFactor = 0.14; // smoothing
+    this.x = viewW/2; this.y = viewH/2;
+    this.lerpFactor = 1.0; // 1 = instant center (player stays exactly in middle)
   }
   follow(targetX, targetY){
     const halfW = this.viewW/2; const halfH = this.viewH/2;
@@ -87,6 +85,7 @@ class Camera{
     this.y = lerp(this.y, desiredY, this.lerpFactor);
   }
   worldToScreen(wx, wy){
+    // screen coords in CSS pixels (matching canvas client coords used for input)
     return {sx: wx - (this.x - this.viewW/2), sy: wy - (this.y - this.viewH/2)};
   }
 }
@@ -99,7 +98,7 @@ class Player{
     this.image = image;
     this.width = 48; this.height = 48;
   }
-  update(dt, input, world){
+  update(dt, input, world, mouseWorld){
     let dx = 0, dy = 0;
     if(input.isDown('up')) dy -= 1;
     if(input.isDown('down')) dy += 1;
@@ -110,16 +109,17 @@ class Player{
       dx /= len; dy /= len;
       this.x += dx * this.speed * dt;
       this.y += dy * this.speed * dt;
-      this.angle = Math.atan2(dy, dx);
+    }
+    // rotate to face mouse world position if available
+    if(mouseWorld){
+      this.angle = Math.atan2(mouseWorld.y - this.y, mouseWorld.x - this.x);
     }
     this.x = clamp(this.x, 8, world.width-8);
     this.y = clamp(this.y, 8, world.height-8);
   }
   draw(ctx, camera){
     const {sx, sy} = camera.worldToScreen(this.x, this.y);
-    ctx.save();
-    ctx.translate(sx, sy);
-    ctx.rotate(this.angle + Math.PI/2);
+    ctx.save(); ctx.translate(sx, sy); ctx.rotate(this.angle + Math.PI/2);
     if(this.image && this.image.complete){
       ctx.drawImage(this.image, -this.width/2, -this.height/2, this.width, this.height);
     } else {
@@ -136,7 +136,6 @@ class WorldObject{
     const {sx, sy} = camera.worldToScreen(this.x, this.y);
     ctx.save(); ctx.translate(sx, sy);
     if(this.type === 'tree'){
-      // simple tree: trunk + foliage
       ctx.fillStyle = '#6b3e16'; ctx.fillRect(-6, 6, 12, 18);
       ctx.beginPath(); ctx.fillStyle = '#228b22'; ctx.ellipse(0, -2, 18, 14, 0, 0, Math.PI*2); ctx.fill();
     } else if(this.type === 'crate'){
@@ -146,7 +145,6 @@ class WorldObject{
     } else if(this.type === 'rock'){
       ctx.beginPath(); ctx.fillStyle = '#9aa0a6'; ctx.ellipse(0, 0, 18, 12, 0, 0, Math.PI*2); ctx.fill();
     }
-    // optional label to make movement obvious
     ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.font = '11px system-ui,Arial'; ctx.fillText(this.type, -ctx.measureText(this.type).width/2, 28);
     ctx.restore();
   }
@@ -154,25 +152,25 @@ class WorldObject{
 
 // ------------------------ Game ------------------------
 class Game{
-  constructor(canvas){
+  // canvas: reference; viewW/viewH in CSS pixels
+  constructor(canvas, viewW, viewH){
     this.canvas = canvas; this.ctx = canvas.getContext('2d');
+    this.viewW = viewW; this.viewH = viewH;
     this.input = new InputHandler();
     this.world = {width: 2400, height: 1600};
-    this.camera = new Camera(canvas.width, canvas.height, this.world.width, this.world.height);
+    this.camera = new Camera(viewW, viewH, this.world.width, this.world.height);
 
     this.playerImage = new Image();
     this.playerImage.src = './PlayerModel.png';
     this.player = new Player(this.world.width/2, this.world.height/2, this.playerImage);
 
-    // create a few objects spread around to give reference while moving
+    // create objects for reference
     this.objects = [];
-    // grid of trees
     for(let gx=200; gx<=2200; gx+=400){
       for(let gy=200; gy<=1400; gy+=400){
         this.objects.push(new WorldObject(gx + (Math.random()*120-60), gy + (Math.random()*120-60), ['tree','crate','rock'][Math.floor(Math.random()*3)]));
       }
     }
-    // some clustered area
     for(let i=0;i<12;i++){
       const x = 1200 + Math.random()*300 - 150;
       const y = 400 + Math.random()*300 - 150;
@@ -180,11 +178,25 @@ class Game{
     }
 
     this.last = performance.now();
+    this.mouseWorld = null; // {x,y}
     this._bind();
     this.fps = 0; this.frameCount = 0; this._fpsTimer = 0;
     requestAnimationFrame(this.loop.bind(this));
   }
-  _bind(){ window.addEventListener('resize', ()=>this._onResize()); }
+  _bind(){
+    window.addEventListener('resize', ()=>this._onResize());
+    // mouse tracking on canvas
+    this.canvas.addEventListener('mousemove', e=>{
+      const rect = this.canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left; // CSS pixels
+      const my = e.clientY - rect.top;
+      // convert to world coords using camera
+      const worldX = this.camera.x - this.camera.viewW/2 + mx;
+      const worldY = this.camera.y - this.camera.viewH/2 + my;
+      this.mouseWorld = {x: worldX, y: worldY};
+    });
+    this.canvas.addEventListener('mouseleave', ()=>{ this.mouseWorld = null; });
+  }
   _onResize(){}
   loop(now){
     const dt = Math.min(0.05, (now - this.last)/1000);
@@ -195,13 +207,18 @@ class Game{
     if(this._fpsTimer >= 0.5){ this.fps = Math.round(this.frameCount / this._fpsTimer); this.frameCount = 0; this._fpsTimer = 0; }
     requestAnimationFrame(this.loop.bind(this));
   }
-  update(dt){ this.player.update(dt, this.input, this.world); this.camera.follow(this.player.x, this.player.y); }
+  update(dt){
+    this.player.update(dt, this.input, this.world, this.mouseWorld);
+    // camera instantly centers on player (player will appear in middle)
+    this.camera.follow(this.player.x, this.player.y);
+  }
   render(){
     const ctx = this.ctx; const cw = this.canvas.width; const ch = this.canvas.height;
     ctx.clearRect(0,0,cw,ch);
     this._drawBackground(ctx);
     this._drawObjects(ctx);
     this.player.draw(ctx, this.camera);
+    this._drawCursorMarker(ctx);
     this._drawUI(ctx);
   }
   _drawBackground(ctx){
@@ -218,17 +235,25 @@ class Game{
     }
   }
   _drawObjects(ctx){
-    // draw world objects sorted by y for basic depth
     const sorted = this.objects.slice().sort((a,b)=>a.y - b.y);
     for(const obj of sorted) obj.draw(ctx, this.camera);
   }
+  _drawCursorMarker(ctx){
+    if(!this.mouseWorld) return;
+    const {sx, sy} = this.camera.worldToScreen(this.mouseWorld.x, this.mouseWorld.y);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
+  }
   _drawUI(ctx){
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(8,8,260,72);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(8,8,320,80);
     ctx.fillStyle = '#fff'; ctx.font = '13px system-ui,Arial';
     ctx.fillText('Position: ' + Math.round(this.player.x) + ', ' + Math.round(this.player.y), 16, 28);
-    ctx.fillText('Use W A S D to move (arrows disabled).', 16, 48);
-    ctx.fillText('FPS: ' + this.fps, 16, 64);
+    ctx.fillText('Use W A S D to move. Player faces mouse cursor.', 16, 48);
+    ctx.fillText('Player is centered by camera.', 16, 66);
+    ctx.fillText('FPS: ' + this.fps, 240, 28);
     ctx.restore();
   }
 }
@@ -236,19 +261,24 @@ class Game{
 // ------------------------ Bootstrap ------------------------
 window.addEventListener('load', ()=>{
   const canvas = document.getElementById('game');
+  // HiDPI: keep canvas backing store high-res but use CSS pixels for view size and input
   function fixHiDPI(){
     const dpr = window.devicePixelRatio || 1;
-    canvas.style.width = canvas.width + 'px';
-    canvas.style.height = canvas.height + 'px';
-    canvas.width = Math.floor(900 * dpr);
-    canvas.height = Math.floor(600 * dpr);
+    // record css size
+    const cssW = canvas.width; const cssH = canvas.height;
+    canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   fixHiDPI();
-  const game = new Game(canvas);
+  // pass CSS pixel view size (original width/height)
+  const viewW = parseInt(canvas.style.width) || 900;
+  const viewH = parseInt(canvas.style.height) || 600;
+  const game = new Game(canvas, viewW, viewH);
 
-  // drag & drop image replacement for quick testing
+  // drag & drop image replacement
   window.addEventListener('dragover', e=>e.preventDefault());
   window.addEventListener('drop', e=>{
     e.preventDefault();
