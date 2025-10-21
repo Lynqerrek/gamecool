@@ -1,9 +1,16 @@
 <!--
-Top-down 2D HTML game
+Top-down 2D HTML game (single file)
 Game title: Hide and Gun
+Features (this version):
+- WASD movement
+- Player rotates to face cursor
+- Centered camera
+- World objects and collision (player collides with objects)
+- Loading screen
+- Minimap in a separate popup window (click 'Open Minimap')
+- Player sprite: Player.png
 
-Place this file in your GitHub repo (branch: main) as index.html
-Add your player sprite as: ./Player.png (same folder as this file)
+Save as index.html in your repo (branch main) and place Player.png next to it.
 -->
 
 <!doctype html>
@@ -16,252 +23,221 @@ Add your player sprite as: ./Player.png (same folder as this file)
     html,body{height:100%;margin:0;background:#0e1724;color:#ddd;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;overflow:hidden}
     #game-container{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px}
     canvas{background:#1b2b3a;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.6)}
-    #loading{
-      position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
-      background:#0e1724;color:#fff;font-size:36px;z-index:999;transition:opacity 0.6s ease;
-    }
-    #loading.fade-out{opacity:0;pointer-events:none;}
+    #loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0e1724;color:#fff;font-size:36px;z-index:999;transition:opacity 0.6s ease}
+    #loading.fade-out{opacity:0;pointer-events:none}
+    .toolbar{display:flex;gap:8px;align-items:center}
+    button{background:#2b3b4a;color:#fff;border:0;padding:8px 12px;border-radius:6px;cursor:pointer}
   </style>
 </head>
 <body>
   <div id="loading">
     <div style="font-size:64px;font-weight:700;margin-bottom:10px;letter-spacing:1px;">Hide and Gun</div>
-    <div style="font-size:20px;opacity:0.7;">Loading...</div>
+    <div style="font-size:20px;opacity:0.8;">Loading...</div>
   </div>
 
   <div id="game-container" style="display:none;">
-    <div style="width:100%;max-width:900px;text-align:center;padding:6px 0;font-size:14px;">
-      Use <strong>W A S D</strong> to move — Player faces the mouse cursor — Camera centered
+    <div style="width:100%;max-width:980px;display:flex;justify-content:space-between;align-items:center;">
+      <div style="padding:6px 0;font-size:14px;">Use <strong>W A S D</strong> to move — Player faces the mouse cursor — Camera centered</div>
+      <div class="toolbar">
+        <button id="open-minimap">Open Minimap</button>
+        <button id="toggle-collider-draw">Toggle Colliders</button>
+      </div>
     </div>
-    <canvas id="game" width="900" height="600"></canvas>
+    <canvas id="game" width="980" height="640"></canvas>
   </div>
 
 <script>
-// Utility functions
+// ========= Utilities =========
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function lerp(a,b,t){return a+(b-a)*t;}
 
-// Input handler (WASD)
+// ========= Input (WASD) =========
 class InputHandler{
   constructor(){
     this.keys=new Set();
-    window.addEventListener('keydown', e=>{
-      const k=this._n(e.key);
-      if(k){ this.keys.add(k); e.preventDefault?.(); }
-    }, {passive:false});
-    window.addEventListener('keyup', e=>{
-      const k=this._n(e.key);
-      if(k) this.keys.delete(k);
-    });
+    window.addEventListener('keydown', e=>{const k=this._n(e.key); if(k){this.keys.add(k); e.preventDefault?.();}}, {passive:false});
+    window.addEventListener('keyup', e=>{const k=this._n(e.key); if(k) this.keys.delete(k);});
   }
   _n(k){ if(!k) return null; k=k.toLowerCase(); if(k==='w') return 'up'; if(k==='a') return 'left'; if(k==='s') return 'down'; if(k==='d') return 'right'; return null; }
   isDown(k){ return this.keys.has(k); }
 }
 
-// Camera that centers on player
+// ========= Camera =========
 class Camera{
-  constructor(viewW, viewH, worldW, worldH){
-    this.viewW = viewW; this.viewH = viewH;
-    this.worldW = worldW; this.worldH = worldH;
-    this.x = viewW/2; this.y = viewH/2;
-  }
-  follow(tx, ty){
-    const halfW = this.viewW/2, halfH = this.viewH/2;
-    const desiredX = clamp(tx, halfW, this.worldW - halfW);
-    const desiredY = clamp(ty, halfH, this.worldH - halfH);
-    this.x = desiredX; this.y = desiredY; // instant center
-  }
-  worldToScreen(wx, wy){
-    return { sx: wx - (this.x - this.viewW/2), sy: wy - (this.y - this.viewH/2) };
-  }
+  constructor(viewW, viewH, worldW, worldH){ this.viewW=viewW; this.viewH=viewH; this.worldW=worldW; this.worldH=worldH; this.x=viewW/2; this.y=viewH/2; }
+  follow(tx, ty){ const halfW=this.viewW/2, halfH=this.viewH/2; const desiredX=clamp(tx, halfW, this.worldW-halfW); const desiredY=clamp(ty, halfH, this.worldH-halfH); this.x=desiredX; this.y=desiredY; }
+  worldToScreen(wx, wy){ return { sx: wx - (this.x - this.viewW/2), sy: wy - (this.y - this.viewH/2) }; }
 }
 
-// Player class
+// ========= Player =========
 class Player{
-  constructor(x,y,img){
-    this.x = x; this.y = y;
-    this.image = img;
-    this.speed = 220; // px/sec
-    this.angle = 0;
-    this.w = 48; this.h = 48;
-  }
-  update(dt, input, world, mouse){
-    let dx = 0, dy = 0;
+  constructor(x,y,img){ this.x=x; this.y=y; this.image=img; this.speed=220; this.angle=0; this.r=18; this.w=48; this.h=48; }
+  attemptMove(dx, dy){ this.x += dx; this.y += dy; }
+  update(dt, input, world, mouse, objects){
+    let dx=0, dy=0;
     if(input.isDown('up')) dy -= 1;
     if(input.isDown('down')) dy += 1;
     if(input.isDown('left')) dx -= 1;
     if(input.isDown('right')) dx += 1;
-    if(dx !== 0 || dy !== 0){
-      const len = Math.hypot(dx,dy);
-      dx /= len; dy /= len;
-      this.x += dx * this.speed * dt;
-      this.y += dy * this.speed * dt;
+    if(dx !== 0 || dy !== 0){ const len=Math.hypot(dx,dy); dx = dx/len * this.speed * dt; dy = dy/len * this.speed * dt; }
+    // attempt movement then resolve collisions
+    this.x += dx; this.y += dy;
+    // collision resolution: push out using minimum translation vector
+    for(const obj of objects){
+      const sx = this.x - obj.x; const sy = this.y - obj.y; const dist = Math.hypot(sx, sy);
+      const minDist = this.r + obj.r;
+      if(dist < minDist){
+        let overlap = minDist - dist;
+        if(dist === 0){ // perfect overlap, nudge randomly
+          const a = Math.random()*Math.PI*2; this.x += Math.cos(a)*overlap; this.y += Math.sin(a)*overlap;
+        } else {
+          this.x += (sx / dist) * overlap;
+          this.y += (sy / dist) * overlap;
+        }
+      }
     }
+    // clamp to world
+    this.x = clamp(this.x, this.r, world.width - this.r);
+    this.y = clamp(this.y, this.r, world.height - this.r);
+    // face mouse
     if(mouse) this.angle = Math.atan2(mouse.y - this.y, mouse.x - this.x);
-    this.x = clamp(this.x, 0, world.width);
-    this.y = clamp(this.y, 0, world.height);
   }
-  draw(ctx, cam){
-    const {sx, sy} = cam.worldToScreen(this.x, this.y);
-    ctx.save();
-    ctx.translate(sx, sy);
-    ctx.rotate(this.angle + Math.PI/2);
-    if(this.image && this.image.complete) ctx.drawImage(this.image, -this.w/2, -this.h/2, this.w, this.h);
-    else { ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill(); }
-    ctx.restore();
-  }
+  draw(ctx, cam, drawColliders=false){ const {sx, sy} = cam.worldToScreen(this.x, this.y); ctx.save(); ctx.translate(sx, sy); ctx.rotate(this.angle + Math.PI/2);
+    if(this.image && this.image.complete) ctx.drawImage(this.image, -this.w/2, -this.h/2, this.w, this.h); else { ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill(); }
+    if(drawColliders){ ctx.strokeStyle='rgba(255,0,0,0.6)'; ctx.beginPath(); ctx.arc(0,0,this.r,0,Math.PI*2); ctx.stroke(); }
+    ctx.restore(); }
 }
 
-// Simple world object for reference
+// ========= World Objects =========
 class WorldObject{
-  constructor(x,y,type){ this.x=x; this.y=y; this.type=type; }
-  draw(ctx, cam){
-    const {sx, sy} = cam.worldToScreen(this.x, this.y);
-    ctx.save(); ctx.translate(sx, sy);
-    if(this.type === 'tree'){
-      ctx.fillStyle = '#6b3e16'; ctx.fillRect(-6,6,12,18);
-      ctx.beginPath(); ctx.fillStyle = '#228b22'; ctx.ellipse(0,-2,18,14,0,0,Math.PI*2); ctx.fill();
-    } else if(this.type === 'crate'){
-      ctx.fillStyle = '#8b5a2b'; ctx.fillRect(-16,-12,32,24);
-      ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.strokeRect(-16,-12,32,24);
-    } else {
-      ctx.beginPath(); ctx.fillStyle = '#9aa0a6'; ctx.ellipse(0,0,18,12,0,0,Math.PI*2); ctx.fill();
-    }
-    ctx.restore();
-  }
+  constructor(x,y,type){ this.x=x; this.y=y; this.type=type; this.r = type==='tree'?28:(type==='crate'?20:18); }
+  draw(ctx, cam, drawColliders=false){ const {sx, sy} = cam.worldToScreen(this.x, this.y); ctx.save(); ctx.translate(sx, sy);
+    if(this.type === 'tree'){ ctx.fillStyle='#6b3e16'; ctx.fillRect(-6,6,12,18); ctx.beginPath(); ctx.fillStyle='#228b22'; ctx.ellipse(0,-2,24,18,0,0,Math.PI*2); ctx.fill(); }
+    else if(this.type === 'crate'){ ctx.fillStyle='#8b5a2b'; ctx.fillRect(-16,-12,32,24); ctx.strokeStyle='rgba(0,0,0,0.25)'; ctx.strokeRect(-16,-12,32,24); }
+    else { ctx.beginPath(); ctx.fillStyle='#9aa0a6'; ctx.ellipse(0,0,18,12,0,0,Math.PI*2); ctx.fill(); }
+    if(drawColliders){ ctx.strokeStyle='rgba(255,0,0,0.45)'; ctx.beginPath(); ctx.arc(0,0,this.r,0,Math.PI*2); ctx.stroke(); }
+    ctx.restore(); }
 }
 
-// Core Game
+// ========= Game =========
 class Game{
   constructor(canvas, viewW, viewH){
-    this.canvas = canvas; this.ctx = canvas.getContext('2d');
-    this.viewW = viewW; this.viewH = viewH;
-    this.input = new InputHandler();
-    this.world = { width: 2400, height: 1600 };
-    this.cam = new Camera(viewW, viewH, this.world.width, this.world.height);
-
-    this.playerImg = new Image();
-    this.playerImg.src = './Player.png'; // <--- player image file name
-
-    this.player = new Player(this.world.width/2, this.world.height/2, this.playerImg);
+    this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.viewW=viewW; this.viewH=viewH;
+    this.input = new InputHandler(); this.world = {width:2400, height:1600}; this.cam = new Camera(viewW, viewH, this.world.width, this.world.height);
+    this.playerImg = new Image(); this.playerImg.src = './Player.png'; this.player = new Player(this.world.width/2, this.world.height/2, this.playerImg);
 
     this.objects = [];
-    for(let i=0;i<25;i++){
-      this.objects.push(new WorldObject(Math.random()*this.world.width, Math.random()*this.world.height, ['tree','crate','rock'][Math.floor(Math.random()*3)]));
+    // place objects in clusters but avoid spawning on top of the player
+    for(let i=0;i<40;i++){
+      let x,y; let tries=0;
+      do{ x = Math.random()*this.world.width; y = Math.random()*this.world.height; tries++; } while(Math.hypot(x-this.player.x,y-this.player.y) < 200 && tries<20);
+      const type = ['tree','crate','rock'][Math.floor(Math.random()*3)];
+      this.objects.push(new WorldObject(x,y,type));
     }
 
-    this.mouse = null;
-    this.last = performance.now();
-    this._bind();
-    requestAnimationFrame(this.loop.bind(this));
+    this.mouse = null; this.last = performance.now(); this.fps=0; this.frame=0; this._fpsT=0; this.drawColliders=false;
+    this.minimapWindow = null; this._bind(); requestAnimationFrame(this.loop.bind(this));
   }
 
   _bind(){
     this.canvas.addEventListener('mousemove', e=>{
-      const rect = this.canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      const wx = this.cam.x - this.cam.viewW/2 + mx;
-      const wy = this.cam.y - this.cam.viewH/2 + my;
-      this.mouse = { x: wx, y: wy };
+      const rect = this.canvas.getBoundingClientRect(); const mx = e.clientX - rect.left; const my = e.clientY - rect.top;
+      const wx = this.cam.x - this.cam.viewW/2 + mx; const wy = this.cam.y - this.cam.viewH/2 + my; this.mouse = {x:wx,y:wy};
     });
     this.canvas.addEventListener('mouseleave', ()=>{ this.mouse = null; });
+
+    document.getElementById('open-minimap').addEventListener('click', ()=>this.openMinimap());
+    document.getElementById('toggle-collider-draw').addEventListener('click', ()=>{ this.drawColliders = !this.drawColliders; });
+  }
+
+  openMinimap(){
+    // open popup if not open
+    if(this.minimapWindow && !this.minimapWindow.closed){ this.minimapWindow.focus(); return; }
+    const w=420,h=300;
+    this.minimapWindow = window.open('', 'HideAndGunMinimap', `width=${w},height=${h}`);
+    if(!this.minimapWindow) return alert('Popup blocked. Allow popups to open minimap.');
+    const doc = this.minimapWindow.document;
+    doc.title = 'Hide and Gun — Minimap';
+    doc.body.style.margin='0'; doc.body.style.background='#0e1724';
+    const canvas = doc.createElement('canvas'); canvas.width=400; canvas.height=260; canvas.style.display='block'; canvas.style.margin='10px auto'; canvas.style.border='1px solid rgba(255,255,255,0.06)'; doc.body.appendChild(canvas);
+    // simple instructions
+    const p = doc.createElement('div'); p.innerText='Minimap — player centered marker'; p.style.color='#ddd'; p.style.textAlign='center'; p.style.fontFamily='system-ui,Arial'; p.style.fontSize='12px'; doc.body.appendChild(p);
+
+    // store reference for drawing
+    this.minimapCanvas = canvas; this.minimapCtx = canvas.getContext('2d');
   }
 
   loop(now){
-    const dt = Math.min(0.05, (now - this.last) / 1000);
-    this.last = now;
-    this.player.update(dt, this.input, this.world, this.mouse);
-    this.cam.follow(this.player.x, this.player.y); // instant center
+    const dt = Math.min(0.05, (now - this.last)/1000); this.last = now;
+    this.player.update(dt, this.input, this.world, this.mouse, this.objects);
+    this.cam.follow(this.player.x, this.player.y);
     this.render();
+    if(this.minimapWindow && !this.minimapWindow.closed) this.renderMinimap();
+    this._fpsT += dt; this.frame++;
+    if(this._fpsT >= 0.5){ this.fps = Math.round(this.frame / this._fpsT); this.frame = 0; this._fpsT = 0; }
     requestAnimationFrame(this.loop.bind(this));
   }
 
   render(){
-    const ctx = this.ctx;
-    ctx.clearRect(0,0,this.canvas.width, this.canvas.height);
+    const ctx = this.ctx; const cw = this.canvas.width, ch = this.canvas.height;
+    ctx.clearRect(0,0,cw,ch);
     this._drawBackground(ctx);
-    this._drawObjects(ctx);
-    this.player.draw(ctx, this.cam);
-    this._drawCursorMarker(ctx);
+    // draw objects sorted by y
+    const sorted = this.objects.slice().sort((a,b)=>a.y-b.y);
+    for(const o of sorted) o.draw(ctx, this.cam, this.drawColliders);
+    this.player.draw(ctx, this.cam, this.drawColliders);
+    this._drawCursor(ctx);
     this._drawUI(ctx);
   }
 
   _drawBackground(ctx){
-    const tile = 64;
-    const startX = Math.floor((this.cam.x - this.cam.viewW/2) / tile) * tile;
-    const startY = Math.floor((this.cam.y - this.cam.viewH/2) / tile) * tile;
-    for(let y = startY - tile; y < this.cam.y + this.cam.viewH/2 + tile; y += tile){
-      for(let x = startX - tile; x < this.cam.x + this.cam.viewW/2 + tile; x += tile){
-        if(x < 0 || x >= this.world.width || y < 0 || y >= this.world.height) continue;
-        const {sx, sy} = this.cam.worldToScreen(x, y);
-        ctx.fillStyle = ((Math.floor(x/tile)+Math.floor(y/tile))%2 === 0) ? 'rgba(30,45,65,0.7)' : 'rgba(28,40,58,0.7)';
-        ctx.fillRect(sx, sy, tile-1, tile-1);
+    const tile=64; const startX = Math.floor((this.cam.x - this.cam.viewW/2)/tile)*tile; const startY = Math.floor((this.cam.y - this.cam.viewH/2)/tile)*tile;
+    for(let y=startY-tile; y<this.cam.y+this.cam.viewH/2+tile; y+=tile){
+      for(let x=startX-tile; x<this.cam.x+this.cam.viewW/2+tile; x+=tile){
+        if(x<0 || x>=this.world.width || y<0 || y>=this.world.height) continue;
+        const {sx,sy} = this.cam.worldToScreen(x,y);
+        ctx.fillStyle = ((Math.floor(x/tile)+Math.floor(y/tile))%2===0)?'rgba(30,45,65,0.7)':'rgba(28,40,58,0.7)';
+        ctx.fillRect(sx,sy,tile-1,tile-1);
       }
     }
   }
 
-  _drawObjects(ctx){
-    const sorted = this.objects.slice().sort((a,b) => a.y - b.y);
-    for(const o of sorted) o.draw(ctx, this.cam);
-  }
+  _drawCursor(ctx){ if(!this.mouse) return; const {sx,sy} = this.cam.worldToScreen(this.mouse.x,this.mouse.y); ctx.save(); ctx.beginPath(); ctx.arc(sx,sy,6,0,Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fill(); ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke(); ctx.restore(); }
 
-  _drawCursorMarker(ctx){
-    if(!this.mouse) return;
-    const {sx, sy} = this.cam.worldToScreen(this.mouse.x, this.mouse.y);
-    ctx.save();
-    ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.restore();
-  }
+  _drawUI(ctx){ ctx.save(); ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(8,8,420,84); ctx.fillStyle='#fff'; ctx.font='13px system-ui,Arial'; ctx.fillText('Position: '+Math.round(this.player.x)+', '+Math.round(this.player.y), 16, 28); ctx.fillText('WASD to move — player collides with objects', 16, 50); ctx.fillText('FPS: '+this.fps, 16, 72); ctx.restore(); }
 
-  _drawUI(ctx){
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(8,8,340,80);
-    ctx.fillStyle = '#fff'; ctx.font = '13px system-ui,Arial';
-    ctx.fillText('Position: ' + Math.round(this.player.x) + ', ' + Math.round(this.player.y), 16, 28);
-    ctx.fillText('Use W A S D to move. Player faces mouse cursor.', 16, 48);
-    ctx.fillText('Player is centered by camera. Player image: Player.png', 16, 66);
-    ctx.restore();
+  renderMinimap(){ if(!this.minimapCtx) return; const ctx = this.minimapCtx; const cw = this.minimapCanvas.width, ch = this.minimapCanvas.height; ctx.clearRect(0,0,cw,ch);
+    // draw world bounds scaled to canvas while keeping aspect
+    const padding = 8; const mapW = cw - padding*2, mapH = ch - padding*2; const scaleX = mapW / this.world.width, scaleY = mapH / this.world.height; const scale = Math.min(scaleX, scaleY);
+    const offsetX = (cw - this.world.width*scale)/2, offsetY = (ch - this.world.height*scale)/2;
+    // background
+    ctx.fillStyle='#0b1220'; ctx.fillRect(0,0,cw,ch);
+    // objects
+    for(const o of this.objects){ const ox = offsetX + o.x*scale, oy = offsetY + o.y*scale; if(o.type==='tree') ctx.fillStyle='#2e8b2e'; else if(o.type==='crate') ctx.fillStyle='#8b5a2b'; else ctx.fillStyle='#9aa0a6'; ctx.beginPath(); ctx.arc(ox,oy, Math.max(1, o.r*scale), 0, Math.PI*2); ctx.fill(); }
+    // player as triangle pointing to angle
+    const px = offsetX + this.player.x*scale, py = offsetY + this.player.y*scale; const pr = Math.max(3, this.player.r*scale);
+    ctx.save(); ctx.translate(px,py); ctx.rotate(this.player.angle);
+    ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.moveTo(0,-pr*1.4); ctx.lineTo(pr, pr*1.2); ctx.lineTo(-pr, pr*1.2); ctx.closePath(); ctx.fill(); ctx.restore();
+    // draw border
+    ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.strokeRect(offsetX-1, offsetY-1, this.world.width*scale+2, this.world.height*scale+2);
   }
 }
 
-// Bootstrap
+// ========= Bootstrap =========
 window.addEventListener('load', ()=>{
-  const loading = document.getElementById('loading');
-  const cont = document.getElementById('game-container');
-  const c = document.getElementById('game');
+  const loading = document.getElementById('loading'); const cont = document.getElementById('game-container'); const canvas = document.getElementById('game');
+  // HiDPI
+  const dpr = window.devicePixelRatio || 1; const cssW = canvas.width, cssH = canvas.height; canvas.style.width = cssW+'px'; canvas.style.height = cssH+'px'; canvas.width = Math.floor(cssW * dpr); canvas.height = Math.floor(cssH * dpr); const ctx = canvas.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  // create game
+  const game = new Game(canvas, cssW, cssH);
 
-  // HiDPI: use CSS size as logical view size, scale backing store
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = c.width, cssH = c.height;
-  c.style.width = cssW + 'px'; c.style.height = cssH + 'px';
-  c.width = Math.floor(cssW * dpr); c.height = Math.floor(cssH * dpr);
-  const ctx = c.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // remove loading once player image loaded (or timeout)
+  const start = performance.now(); const maxWait = 3000; const check = setInterval(()=>{
+    if(game.playerImg.complete || performance.now()-start > maxWait){ loading.classList.add('fade-out'); setTimeout(()=>{ loading.remove(); cont.style.display='flex'; }, 600); clearInterval(check); }
+  }, 100);
 
-  const game = new Game(c, cssW, cssH);
-
-  // remove loading when player image is ready
-  const checkLoaded = setInterval(()=>{
-    if(game.playerImg.complete){
-      loading.classList.add('fade-out');
-      setTimeout(()=>{ loading.remove(); cont.style.display='flex'; }, 600);
-      clearInterval(checkLoaded);
-    }
-  }, 150);
-
-  // drag & drop to replace player image in-session
-  window.addEventListener('dragover', e=>e.preventDefault());
-  window.addEventListener('drop', e=>{
-    e.preventDefault();
-    const f = e.dataTransfer.files?.[0];
-    if(!f) return;
-    if(!f.type.startsWith('image/')) return alert('Drop an image file.');
-    const url = URL.createObjectURL(f);
-    game.playerImg.src = url;
-    alert('Player sprite updated for this session. Commit your Player.png into the repo to make it permanent.');
-  });
+  // drag & drop to replace player image
+  window.addEventListener('dragover', e=>e.preventDefault()); window.addEventListener('drop', e=>{ e.preventDefault(); const f = e.dataTransfer.files?.[0]; if(!f) return; if(!f.type.startsWith('image/')) return alert('Drop an image file.'); const url = URL.createObjectURL(f); game.playerImg.src = url; alert('Player sprite updated for this session. Commit your Player.png into the repo to make it permanent.'); });
 });
 </script>
 </body>
