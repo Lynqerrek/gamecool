@@ -15,10 +15,14 @@
   #gameCanvas{border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.6);background:transparent;display:block}
   .toolbar{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%}
   button{background:#2b3b4a;color:#fff;border:0;padding:8px 12px;border-radius:6px;cursor:pointer}
-  #loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:var(--bg);z-index:9999;color:#fff;font-weight:700;transition:opacity .45s}
+  #loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--bg);z-index:9999;color:#fff;font-weight:700;transition:opacity .45s}
   #loading.fade{opacity:0;pointer-events:none}
   .small{font-size:13px;color:rgba(255,255,255,0.75)}
   footer{position:fixed;right:12px;bottom:12px;color:rgba(255,255,255,0.06);font-size:11px}
+  /* progress bar */
+  .progress-wrap{width:420px;height:16px;background:rgba(255,255,255,0.06);border-radius:10px;overflow:hidden}
+  .progress-bar{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#ffd966);border-radius:10px;transition:width .15s linear}
+  .progress-text{font-size:13px;color:rgba(255,255,255,0.9);margin-top:6px}
   @media(max-width:900px){#app{grid-template-columns:1fr} #minimap{height:200px}}
 </style>
 </head>
@@ -26,6 +30,12 @@
   <div id="loading">
     <div style="font-size:54px;letter-spacing:1px;">Hide and Gun</div>
     <div class="small">Loading assets…</div>
+
+    <div class="progress-wrap" aria-hidden="false">
+      <div id="progressBar" class="progress-bar"></div>
+    </div>
+    <div id="progressText" class="progress-text">0%</div>
+    <div class="small" style="opacity:0.85">If loading stalls, the game will continue after a few seconds.</div>
   </div>
 
   <div id="app" style="display:none;">
@@ -59,8 +69,10 @@
   <footer>Hide and Gun — prototype</footer>
 
 <script>
-/* Upgraded: fixed background tiling glitch (no seams), minimap shows whole world correctly and is on the left.
-   Keeps collisions, WASD, mouse facing, drag/drop sprite replacement. */
+/* Upgraded loader + improvements:
+   - Robust asset preloader with progress bar and timeout fallback
+   - Keeps minimap left, collisions, fixed tiles, HiDPI
+*/
 
 (() => {
   // CONFIG
@@ -72,7 +84,7 @@
   const clamp = (v,a,b) => v < a ? a : (v > b ? b : v);
   const now = () => performance.now();
 
-  // INPUT (WASD)
+  // INPUT
   class Input {
     constructor(){
       this.keys = new Set();
@@ -100,7 +112,7 @@
     worldToScreen(wx,wy){ return { sx: wx - (this.x - this.viewW/2), sy: wy - (this.y - this.viewH/2) }; }
   }
 
-  // PLAYER (circle collider)
+  // PLAYER
   class Player {
     constructor(x,y,img){
       this.x=x; this.y=y; this.img=img; this.r=18; this.speed=220; this.angle=0; this.w=48; this.h=48;
@@ -170,35 +182,42 @@
   const toggleBtn = document.getElementById('toggleColliders');
   const resetBtn = document.getElementById('resetPlayer');
   const status = document.getElementById('status');
+  const progressBar = document.getElementById('progressBar');
+  const progressText = document.getElementById('progressText');
 
-  // HiDPI scaling for both canvases (use CSS pixels as logical size)
+  // HiDPI scaling
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.width = VIEW_W, cssH = canvas.height = VIEW_H;
   canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
   canvas.width = Math.floor(cssW * dpr); canvas.height = Math.floor(cssH * dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
 
-  const mmCssW = minimap.width = 280, mmCssH = minimap.height = Math.max(300, Math.min(window.innerHeight - 56, 800));
+  const mmCssW = minimap.width = 280;
+  const mmCssH = Math.max(300, Math.min(window.innerHeight - 56, 800));
   minimap.style.height = mmCssH + 'px';
   minimap.style.width = mmCssW + 'px';
-  minimap.width = Math.floor(mmCssW * dpr); minimap.height = Math.floor(mmCssH * dpr);
+  minimap.width = Math.floor(mmCssW * dpr);
+  minimap.height = Math.floor(mmCssH * dpr);
   mmCtx.setTransform(dpr,0,0,dpr,0,0);
 
-  // assets
-  const playerImg = new Image();
-  playerImg.src = './Player.png';
+  // ASSETS TO LOAD
+  const assets = [
+    { type: 'image', src: './Player.png', target: 'player' }
+    // add more assets here if needed
+  ];
+  const loaders = {};
+  // prepare placeholders
+  let playerImg = new Image();
+  loaders.player = playerImg;
 
-  // background tile precomputation to avoid seams
+  // pre-create tile canvas used by background (no external asset)
   const tileCanvas = document.createElement('canvas');
   tileCanvas.width = TILE; tileCanvas.height = TILE;
   const tctx = tileCanvas.getContext('2d');
-  // simple two-tone tile
   tctx.fillStyle = 'rgba(30,45,65,0.85)'; tctx.fillRect(0,0,TILE,TILE);
   tctx.fillStyle = 'rgba(28,40,58,0.85)'; tctx.fillRect(0,0,TILE/2,TILE/2); tctx.fillRect(TILE/2,TILE/2,TILE/2,TILE/2);
-  // precreate pattern from the large 2D context (must use same transform scale)
-  const pattern = ctx.createPattern(tileCanvas, 'repeat');
 
-  // static objects once
+  // create objects once and sort by y
   const objects = [];
   const playerStart = { x: WORLD_W/2, y: WORLD_H/2 };
   for(let i=0;i<45;i++){
@@ -206,7 +225,6 @@
     do { x = Math.random()*WORLD_W; y = Math.random()*WORLD_H; tries++; } while(Math.hypot(x-playerStart.x,y-playerStart.y) < 180 && tries<40);
     objects.push(new WorldObj(x,y, ['tree','crate','rock'][Math.floor(Math.random()*3)]));
   }
-  // sort by y once for depth
   objects.sort((a,b)=>a.y - b.y);
 
   // instances
@@ -216,11 +234,10 @@
 
   // state
   let mouseWorld = null;
-  let lastTime = now();
+  let last = now();
   let fps = 0, frameCount = 0, fpsTimer = 0;
   let showColliders = false;
 
-  // UI events
   toggleBtn.addEventListener('click', ()=>{
     showColliders = !showColliders;
     toggleBtn.textContent = 'Show Colliders: ' + (showColliders ? 'On' : 'Off');
@@ -236,7 +253,7 @@
   });
   canvas.addEventListener('mouseleave', ()=>{ mouseWorld = null; });
 
-  // drag & drop player sprite for session
+  // drag & drop for session sprite replacement
   window.addEventListener('dragover', e=>e.preventDefault());
   window.addEventListener('drop', e=>{
     e.preventDefault();
@@ -248,71 +265,103 @@
     alert('Player sprite updated for this session. Commit Player.png to the repo to keep it.');
   });
 
-  // show UI when ready (or after timeout)
-  const start = now();
-  const maxWait = 2000;
-  const readyCheck = setInterval(()=>{
-    if(playerImg.complete || now() - start > maxWait){
-      clearInterval(readyCheck);
-      loading.classList.add('fade');
-      setTimeout(()=>{ loading.remove(); app.style.display = 'grid'; }, 420);
-    }
-  }, 80);
+  // Robust preloader
+  (function preload() {
+    const total = assets.length;
+    let loaded = 0;
+    const maxWait = 4000; // fail-safe: continue after 4s
+    let finished = false;
 
-  // DRAW background without seams by drawing tile-aligned rectangles using integers
-  function drawBackgroundNoSeams(ctx, cam){
-    // fill plain base quickly
-    ctx.fillStyle = '#1b2b3a';
+    function updateProgress() {
+      const pct = Math.round((loaded / total) * 100);
+      progressBar.style.width = pct + '%';
+      progressText.textContent = pct + '%';
+    }
+
+    function done() {
+      if(finished) return;
+      finished = true;
+      progressBar.style.width = '100%';
+      progressText.textContent = '100%';
+      setTimeout(()=> {
+        loading.classList.add('fade');
+        setTimeout(()=>{ loading.remove(); app.style.display = 'grid'; }, 420);
+      }, 160);
+      // start main loop after a short delay so UI shows
+      last = now();
+      requestAnimationFrame(loop);
+    }
+
+    // handle each asset
+    assets.forEach(a=>{
+      if(a.type === 'image'){
+        const img = new Image();
+        img.onload = () => { loaded++; updateProgress(); loaders[a.target] = img; if(a.target === 'player'){ player.img = img; } if(loaded === total) done(); };
+        img.onerror = () => { console.warn('Failed to load', a.src); loaded++; updateProgress(); loaders[a.target] = img; if(a.target === 'player') player.img = img; if(loaded === total) done(); };
+        // start loading
+        img.src = a.src;
+      } else {
+        // other asset types could be handled here
+        loaded++; updateProgress();
+        if(loaded === total) done();
+      }
+    });
+
+    // if zero assets, finish immediately
+    if(total === 0) done();
+
+    // fail-safe timeout
+    setTimeout(()=> {
+      if(!finished) {
+        console.warn('Assets did not finish loading in time — continuing.');
+        done();
+      }
+    }, maxWait);
+  })();
+
+  // background tile canvas created earlier (tileCanvas)
+  const patternCanvas = tileCanvas; // use same name for clarity
+
+  // helper: draw background aligned to world (no seams)
+  function drawBackground(ctx, cam){
     const left = Math.floor(cam.x - cam.viewW/2);
     const top = Math.floor(cam.y - cam.viewH/2);
-    ctx.fillRect(0,0,cam.viewW,cam.viewH);
+    ctx.fillStyle = '#1b2b3a';
+    ctx.fillRect(0,0,cam.viewW, cam.viewH);
 
-    // draw tiles inside viewport aligned to world origin so tiles match world positions exactly
-    // compute tile iteration bounds (in world coords)
     const startX = Math.floor(left / TILE) * TILE;
     const startY = Math.floor(top / TILE) * TILE;
     const endX = left + cam.viewW;
     const endY = top + cam.viewH;
 
-    // use integer positions to avoid subpixel seams
     for(let y = startY; y <= endY; y += TILE){
       for(let x = startX; x <= endX; x += TILE){
-        // skip tiles outside world bounds
         if(x + TILE < 0 || x > WORLD_W || y + TILE < 0 || y > WORLD_H) continue;
         const screenX = x - left;
         const screenY = y - top;
-        ctx.drawImage(tileCanvas, Math.round(screenX), Math.round(screenY));
+        ctx.drawImage(patternCanvas, Math.round(screenX), Math.round(screenY));
       }
     }
   }
 
-  // draw visible objects (no per-frame sort needed; objects array already sorted by y)
-  function drawObjectsFast(ctx, cam){
+  // draw objects (cull by viewport)
+  function drawObjects(ctx, cam){
     const left = cam.x - cam.viewW/2, top = cam.y - cam.viewH/2, right = left + cam.viewW, bottom = top + cam.viewH;
     for(let i=0;i<objects.length;i++){
       const o = objects[i];
-      // quick cull
       if(o.x + o.r < left || o.x - o.r > right || o.y + o.r < top || o.y - o.r > bottom) continue;
       o.draw(ctx, cam, showColliders);
     }
   }
 
-  // minimap: show entire world scaled to canvas; center inside minimap with padding
+  // minimap draws entire world scaled and centered inside minimap canvas
   function drawMinimap(){
-    // use CSS pixels for minimap sizing (we stored mmCssW/mmCssH earlier)
-    const mmCssW_local = minimap.width / (window.devicePixelRatio || 1);
-    const mmCssH_local = minimap.height / (window.devicePixelRatio || 1);
-    // We'll use the CSS sizes (we set style earlier). But to keep it simple, compute using canvas size scaled down:
-    const mmW = mmCssW_local, mmH = mmCssH_local;
-
-    // clear
     mmCtx.save();
-    mmCtx.setTransform(1,0,0,1,0,0); // draw in device-independent coordinates
+    mmCtx.setTransform(1,0,0,1,0,0); // neutral transform to draw in device independent pixels
     mmCtx.clearRect(0,0,minimap.width, minimap.height);
     mmCtx.fillStyle = '#06111a';
     mmCtx.fillRect(0,0,minimap.width, minimap.height);
 
-    // compute scale to fit entire world inside minimap content area with padding
     const pad = 12 * (window.devicePixelRatio || 1);
     const contentW = minimap.width - pad*2, contentH = minimap.height - pad*2;
     const scale = Math.min(contentW / WORLD_W, contentH / WORLD_H);
@@ -320,11 +369,7 @@
     const offsetX = (minimap.width - drawW) / 2;
     const offsetY = (minimap.height - drawH) / 2;
 
-    // draw faint background grid (optional, cheap)
-    mmCtx.fillStyle = '#07121b';
-    mmCtx.fillRect(offsetX, offsetY, drawW, drawH);
-
-    // draw objects (as small circles)
+    // draw objects
     for(let i=0;i<objects.length;i++){
       const o = objects[i];
       const ox = offsetX + o.x * scale;
@@ -336,7 +381,7 @@
       mmCtx.beginPath(); mmCtx.arc(ox, oy, rr, 0, Math.PI*2); mmCtx.fill();
     }
 
-    // draw player as rotated triangle
+    // draw player (triangle rotated)
     const px = offsetX + player.x * scale;
     const py = offsetY + player.y * scale;
     const pr = Math.max(3, Math.round(player.r * scale));
@@ -352,23 +397,36 @@
     mmCtx.fill();
     mmCtx.restore();
 
-    // border around minimap content
+    // draw camera viewport rectangle on minimap (optional)
+    const camLeft = offsetX + (camera.x - camera.viewW/2) * scale;
+    const camTop = offsetY + (camera.y - camera.viewH/2) * scale;
+    const camW = camera.viewW * scale;
+    const camH = camera.viewH * scale;
     mmCtx.strokeStyle = 'rgba(255,255,255,0.06)';
-    mmCtx.lineWidth = 1;
+    mmCtx.lineWidth = Math.max(1, 1 * (window.devicePixelRatio || 1));
+    mmCtx.strokeRect(camLeft, camTop, camW, camH);
+
+    // border
+    mmCtx.strokeStyle = 'rgba(255,255,255,0.06)';
     mmCtx.strokeRect(offsetX - 1, offsetY - 1, drawW + 2, drawH + 2);
 
     mmCtx.restore();
   }
 
-  // main render loop
-  let last = now();
-  let accum = 0;
-  let fps=0, frameCount=0, fpsTimer=0;
+  // draw cursor marker
+  function drawCursor(ctx){
+    if(!mouseWorld) return;
+    const p = camera.worldToScreen(mouseWorld.x, mouseWorld.y);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, 6, 0, Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke(); ctx.restore();
+  }
 
+  // main loop
   function loop(ts){
     const t = ts || now();
     let dt = (t - last) / 1000;
-    if(dt > 0.05) dt = 0.05; // clamp large dt (tab switch)
+    if(dt > 0.05) dt = 0.05;
     last = t;
 
     // update
@@ -379,37 +437,25 @@
     camera.follow(player.x, player.y);
 
     // render
-    // clear visible area
+    // clear canvas (logical size)
     ctx.clearRect(0,0,canvas.width, canvas.height);
 
-    // draw background without seams
-    drawBackgroundNoSeams(ctx, camera);
-
-    // draw objects (fast with culling)
-    drawObjectsFast(ctx, camera);
-
-    // draw player
+    drawBackground(ctx, camera);
+    drawObjects(ctx, camera);
     player.draw(ctx, camera, showColliders);
+    drawCursor(ctx);
 
-    // cursor marker
-    if(mouseWorld){
-      const p = camera.worldToScreen(mouseWorld.x, mouseWorld.y);
-      ctx.save(); ctx.beginPath(); ctx.arc(p.sx, p.sy, 6, 0, Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fill();
-      ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke(); ctx.restore();
-    }
-
-    // UI update
     frameCount++; fpsTimer += dt;
     if(fpsTimer >= 0.4){ fps = Math.round(frameCount / fpsTimer); frameCount = 0; fpsTimer = 0; }
     status.textContent = `Pos: ${Math.round(player.x)} , ${Math.round(player.y)} | FPS: ${fps}`;
 
-    // draw minimap (always shows entire world correctly)
+    // minimap always visible
     drawMinimap();
 
     requestAnimationFrame(loop);
   }
 
-  // mouse -> world conversion
+  // mouse world conversion
   canvas.addEventListener('mousemove', e=>{
     const rect = canvas.getBoundingClientRect();
     const mx = (e.clientX - rect.left);
@@ -418,13 +464,13 @@
   });
   canvas.addEventListener('mouseleave', ()=>{ mouseWorld = null; });
 
-  // small binary search not needed anymore
+  // begin after preload's done (preload triggers loop)
+  // Note: preload() calls requestAnimationFrame(loop) after done
 
-  // start rendering after ready
+  // small initial values
   last = now();
-  requestAnimationFrame(loop);
 
-})();
+})(); // IIFE end
 </script>
 </body>
 </html>
