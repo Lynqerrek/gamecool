@@ -1,27 +1,265 @@
-<!DOCTYPE html>
+<!--
+Top-down 2D HTML game (single file)
+Place this file in your GitHub repo (branch: main) as index.html.
+Add your player sprite as: ./PlayerModel.png (same folder as this file).
+Open index.html in a browser (or use GitHub Pages) to run.
+
+Features (updated):
+- WASD-only movement (primary control)
+- Simple world objects (trees, crates, rocks) so you can see movement
+- Smooth camera that follows the player (with lerp)
+- Player sprite loaded from PlayerModel.png
+- Drag & drop replacement for quick testing
+-->
+
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>3D FPS Game</title>
-<style>
-body { margin: 0; overflow: hidden; font-family: Arial; background: #000; color: #fff; }
-#instructions {
-  position: absolute; top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 20px; background: rgba(0,0,0,0.5);
-  padding: 20px; border-radius: 10px; cursor: pointer;
-}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Top-down 2D Game (WASD + World Objects)</title>
+  <style>
+    html,body{height:100%;margin:0;background:#0e1724;color:#ddd;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+    #game-container{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px}
+    canvas{background:#1b2b3a;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.6)}
+    .ui{max-width:900px;width:100%;display:flex;justify-content:space-between;align-items:center}
+    .panel{background:rgba(255,255,255,0.03);padding:8px 12px;border-radius:6px;font-size:13px}
+    a{color:#8cd3ff}
+  </style>
 </head>
 <body>
-<div id="instructions">Click to play and lock your cursor</div>
+  <div id="game-container">
+    <div class="ui" style="width:100%;max-width:900px">
+      <div class="panel">Use <strong>W A S D</strong> to move — Camera top-down follow</div>
+      <div class="panel">Player sprite: <code>PlayerModel.png</code></div>
+    </div>
+    <canvas id="game" width="900" height="600"></canvas>
+    <div class="ui" style="width:100%;max-width:900px">
+      <div class="panel">Tip: Put <code>PlayerModel.png</code> in the same folder and push to branch <strong>main</strong>.</div>
+      <div class="panel">Drop an image onto the window to replace the player sprite for the current session.</div>
+    </div>
+  </div>
 
-<!-- Three.js and PointerLockControls from CDN -->
-<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/controls/PointerLockControls.js"></script>
+<script>
+// ------------------------ Utilities ------------------------
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+function lerp(a, b, t){ return a + (b - a) * t; }
 
-<!-- Your 3D game code -->
-<script src="game.js"></script>
+// ------------------------ InputHandler (WASD only) ------------------------
+class InputHandler {
+  constructor(){
+    this.keys = new Set();
+    window.addEventListener('keydown', e=>{
+      const k = this._normalize(e.key);
+      if(k) { this.keys.add(k); e.preventDefault?.(); }
+    }, {passive:false});
+    window.addEventListener('keyup', e=>{
+      const k = this._normalize(e.key);
+      if(k) this.keys.delete(k);
+    });
+  }
+  _normalize(k){
+    if(!k) return null;
+    k = k.toLowerCase();
+    // Only WASD supported per your request
+    if(k === 'w') return 'up';
+    if(k === 's') return 'down';
+    if(k === 'a') return 'left';
+    if(k === 'd') return 'right';
+    return null;
+  }
+  isDown(dir){ return this.keys.has(dir); }
+}
+
+// ------------------------ Camera ------------------------
+class Camera{
+  constructor(viewW, viewH, worldW, worldH){
+    this.viewW = viewW; this.viewH = viewH;
+    this.worldW = worldW; this.worldH = worldH;
+    this.x = viewW/2; this.y = viewH/2; // center of camera in world coords
+    this.lerpFactor = 0.14; // smoothing
+  }
+  follow(targetX, targetY){
+    const halfW = this.viewW/2; const halfH = this.viewH/2;
+    const desiredX = clamp(targetX, halfW, this.worldW - halfW);
+    const desiredY = clamp(targetY, halfH, this.worldH - halfH);
+    this.x = lerp(this.x, desiredX, this.lerpFactor);
+    this.y = lerp(this.y, desiredY, this.lerpFactor);
+  }
+  worldToScreen(wx, wy){
+    return {sx: wx - (this.x - this.viewW/2), sy: wy - (this.y - this.viewH/2)};
+  }
+}
+
+// ------------------------ Player ------------------------
+class Player{
+  constructor(x,y,image){
+    this.x = x; this.y = y; this.angle = 0;
+    this.speed = 220; // px/sec
+    this.image = image;
+    this.width = 48; this.height = 48;
+  }
+  update(dt, input, world){
+    let dx = 0, dy = 0;
+    if(input.isDown('up')) dy -= 1;
+    if(input.isDown('down')) dy += 1;
+    if(input.isDown('left')) dx -= 1;
+    if(input.isDown('right')) dx += 1;
+    if(dx !== 0 || dy !== 0){
+      const len = Math.hypot(dx,dy);
+      dx /= len; dy /= len;
+      this.x += dx * this.speed * dt;
+      this.y += dy * this.speed * dt;
+      this.angle = Math.atan2(dy, dx);
+    }
+    this.x = clamp(this.x, 8, world.width-8);
+    this.y = clamp(this.y, 8, world.height-8);
+  }
+  draw(ctx, camera){
+    const {sx, sy} = camera.worldToScreen(this.x, this.y);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(this.angle + Math.PI/2);
+    if(this.image && this.image.complete){
+      ctx.drawImage(this.image, -this.width/2, -this.height/2, this.width, this.height);
+    } else {
+      ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// ------------------------ World Objects ------------------------
+class WorldObject{
+  constructor(x,y,type){ this.x = x; this.y = y; this.type = type; }
+  draw(ctx, camera){
+    const {sx, sy} = camera.worldToScreen(this.x, this.y);
+    ctx.save(); ctx.translate(sx, sy);
+    if(this.type === 'tree'){
+      // simple tree: trunk + foliage
+      ctx.fillStyle = '#6b3e16'; ctx.fillRect(-6, 6, 12, 18);
+      ctx.beginPath(); ctx.fillStyle = '#228b22'; ctx.ellipse(0, -2, 18, 14, 0, 0, Math.PI*2); ctx.fill();
+    } else if(this.type === 'crate'){
+      ctx.fillStyle = '#8b5a2b'; ctx.fillRect(-16, -12, 32, 24);
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.strokeRect(-16, -12, 32, 24);
+      ctx.fillStyle = 'rgba(0,0,0,0.08)'; ctx.fillRect(-16, -2, 32, 4);
+    } else if(this.type === 'rock'){
+      ctx.beginPath(); ctx.fillStyle = '#9aa0a6'; ctx.ellipse(0, 0, 18, 12, 0, 0, Math.PI*2); ctx.fill();
+    }
+    // optional label to make movement obvious
+    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.font = '11px system-ui,Arial'; ctx.fillText(this.type, -ctx.measureText(this.type).width/2, 28);
+    ctx.restore();
+  }
+}
+
+// ------------------------ Game ------------------------
+class Game{
+  constructor(canvas){
+    this.canvas = canvas; this.ctx = canvas.getContext('2d');
+    this.input = new InputHandler();
+    this.world = {width: 2400, height: 1600};
+    this.camera = new Camera(canvas.width, canvas.height, this.world.width, this.world.height);
+
+    this.playerImage = new Image();
+    this.playerImage.src = './PlayerModel.png';
+    this.player = new Player(this.world.width/2, this.world.height/2, this.playerImage);
+
+    // create a few objects spread around to give reference while moving
+    this.objects = [];
+    // grid of trees
+    for(let gx=200; gx<=2200; gx+=400){
+      for(let gy=200; gy<=1400; gy+=400){
+        this.objects.push(new WorldObject(gx + (Math.random()*120-60), gy + (Math.random()*120-60), ['tree','crate','rock'][Math.floor(Math.random()*3)]));
+      }
+    }
+    // some clustered area
+    for(let i=0;i<12;i++){
+      const x = 1200 + Math.random()*300 - 150;
+      const y = 400 + Math.random()*300 - 150;
+      this.objects.push(new WorldObject(x,y,['tree','tree','crate'][Math.floor(Math.random()*3)]));
+    }
+
+    this.last = performance.now();
+    this._bind();
+    this.fps = 0; this.frameCount = 0; this._fpsTimer = 0;
+    requestAnimationFrame(this.loop.bind(this));
+  }
+  _bind(){ window.addEventListener('resize', ()=>this._onResize()); }
+  _onResize(){}
+  loop(now){
+    const dt = Math.min(0.05, (now - this.last)/1000);
+    this.last = now;
+    this.update(dt);
+    this.render();
+    this._fpsTimer += dt; this.frameCount++;
+    if(this._fpsTimer >= 0.5){ this.fps = Math.round(this.frameCount / this._fpsTimer); this.frameCount = 0; this._fpsTimer = 0; }
+    requestAnimationFrame(this.loop.bind(this));
+  }
+  update(dt){ this.player.update(dt, this.input, this.world); this.camera.follow(this.player.x, this.player.y); }
+  render(){
+    const ctx = this.ctx; const cw = this.canvas.width; const ch = this.canvas.height;
+    ctx.clearRect(0,0,cw,ch);
+    this._drawBackground(ctx);
+    this._drawObjects(ctx);
+    this.player.draw(ctx, this.camera);
+    this._drawUI(ctx);
+  }
+  _drawBackground(ctx){
+    const tile = 64;
+    const startX = Math.floor((this.camera.x - this.camera.viewW/2) / tile) * tile;
+    const startY = Math.floor((this.camera.y - this.camera.viewH/2) / tile) * tile;
+    for(let y = startY - tile; y < this.camera.y + this.camera.viewH/2 + tile; y += tile){
+      for(let x = startX - tile; x < this.camera.x + this.camera.viewW/2 + tile; x += tile){
+        if(x < 0 || x >= this.world.width || y < 0 || y >= this.world.height) continue;
+        const {sx, sy} = this.camera.worldToScreen(x, y);
+        ctx.fillStyle = ((Math.floor(x/tile)+Math.floor(y/tile))%2===0) ? 'rgba(30,45,65,0.7)' : 'rgba(28,40,58,0.7)';
+        ctx.fillRect(sx, sy, tile-1, tile-1);
+      }
+    }
+  }
+  _drawObjects(ctx){
+    // draw world objects sorted by y for basic depth
+    const sorted = this.objects.slice().sort((a,b)=>a.y - b.y);
+    for(const obj of sorted) obj.draw(ctx, this.camera);
+  }
+  _drawUI(ctx){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(8,8,260,72);
+    ctx.fillStyle = '#fff'; ctx.font = '13px system-ui,Arial';
+    ctx.fillText('Position: ' + Math.round(this.player.x) + ', ' + Math.round(this.player.y), 16, 28);
+    ctx.fillText('Use W A S D to move (arrows disabled).', 16, 48);
+    ctx.fillText('FPS: ' + this.fps, 16, 64);
+    ctx.restore();
+  }
+}
+
+// ------------------------ Bootstrap ------------------------
+window.addEventListener('load', ()=>{
+  const canvas = document.getElementById('game');
+  function fixHiDPI(){
+    const dpr = window.devicePixelRatio || 1;
+    canvas.style.width = canvas.width + 'px';
+    canvas.style.height = canvas.height + 'px';
+    canvas.width = Math.floor(900 * dpr);
+    canvas.height = Math.floor(600 * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  fixHiDPI();
+  const game = new Game(canvas);
+
+  // drag & drop image replacement for quick testing
+  window.addEventListener('dragover', e=>e.preventDefault());
+  window.addEventListener('drop', e=>{
+    e.preventDefault();
+    const f = e.dataTransfer.files?.[0];
+    if(!f) return;
+    if(!f.type.startsWith('image/')) return alert('Drop an image file.');
+    const url = URL.createObjectURL(f);
+    game.playerImage.src = url;
+    alert('Player sprite updated for this session. Commit your PlayerModel.png into the repo to make it permanent.');
+  });
+});
+</script>
 </body>
 </html>
