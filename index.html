@@ -1,244 +1,456 @@
-<!--
-Top-down 2D HTML game (single file)
-Game title: Hide and Gun
-Features (this version):
-- WASD movement
-- Player rotates to face cursor
-- Centered camera
-- World objects and collision (player collides with objects)
-- Loading screen
-- Minimap in a separate popup window (click 'Open Minimap')
-- Player sprite: Player.png
-
-Save as index.html in your repo (branch main) and place Player.png next to it.
--->
-
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Hide and Gun</title>
-  <style>
-    html,body{height:100%;margin:0;background:#0e1724;color:#ddd;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;overflow:hidden}
-    #game-container{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px}
-    canvas{background:#1b2b3a;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.6)}
-    #loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0e1724;color:#fff;font-size:36px;z-index:999;transition:opacity 0.6s ease}
-    #loading.fade-out{opacity:0;pointer-events:none}
-    .toolbar{display:flex;gap:8px;align-items:center}
-    button{background:#2b3b4a;color:#fff;border:0;padding:8px 12px;border-radius:6px;cursor:pointer}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Hide and Gun</title>
+<style>
+  :root{
+    --bg:#0e1724; --panel:#0f2432; --accent:#ffd166; --muted:rgba(255,255,255,0.08);
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#ddd;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;}
+  #app{display:grid;grid-template-columns:1fr 300px;gap:12px;height:100vh;padding:12px;box-sizing:border-box;}
+  /* Left: game area; Right: minimap & UI */
+  .left{display:flex;flex-direction:column;align-items:center;gap:12px;}
+  .right{display:flex;flex-direction:column;gap:12px;align-items:stretch;}
+  .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;width:980px;max-width:calc(100vw - 340px);}
+  button{background:#2b3b4a;color:#fff;border:0;padding:8px 12px;border-radius:6px;cursor:pointer}
+  #gameCanvas{border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.6);background:transparent;display:block;}
+  #minimap{width:100%;height:100%;background:#08101a;border-radius:8px;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.03);display:block;}
+  .panel{background:var(--panel);padding:10px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.4)}
+  #loading{
+    position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+    gap:8px;background:var(--bg);z-index:9999;color:#fff;font-weight:700;transition:opacity .5s ease;
+  }
+  #loading.fade{opacity:0;pointer-events:none}
+  .meta{font-size:13px;color:rgba(255,255,255,0.85)}
+  .small{font-size:12px;color:rgba(255,255,255,0.7)}
+  footer{position:fixed;right:12px;bottom:12px;color:rgba(255,255,255,0.06);font-size:11px}
+  /* responsive */
+  @media(max-width:1100px){ #app{grid-template-columns:1fr 240px} .toolbar{max-width:calc(100vw - 260px);} }
+  @media(max-width:820px){ #app{grid-template-columns:1fr} .right{order:2} .left{order:1} }
+</style>
 </head>
 <body>
   <div id="loading">
-    <div style="font-size:64px;font-weight:700;margin-bottom:10px;letter-spacing:1px;">Hide and Gun</div>
-    <div style="font-size:20px;opacity:0.8;">Loading...</div>
+    <div style="font-size:58px;letter-spacing:1px">Hide and Gun</div>
+    <div class="small">Loading assets…</div>
   </div>
 
-  <div id="game-container" style="display:none;">
-    <div style="width:100%;max-width:980px;display:flex;justify-content:space-between;align-items:center;">
-      <div style="padding:6px 0;font-size:14px;">Use <strong>W A S D</strong> to move — Player faces the mouse cursor — Camera centered</div>
-      <div class="toolbar">
-        <button id="open-minimap">Open Minimap</button>
-        <button id="toggle-collider-draw">Toggle Colliders</button>
+  <div id="app" style="display:none;">
+    <div class="left">
+      <div class="toolbar panel">
+        <div class="meta">Use <strong>W A S D</strong> to move — Player faces mouse cursor — Camera centered</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="toggleColliders">Show Colliders: Off</button>
+          <button id="resetPlayer">Reset Player</button>
+        </div>
+      </div>
+
+      <canvas id="gameCanvas" width="980" height="640"></canvas>
+
+      <div class="panel" style="width:980px;max-width:calc(100vw - 340px)">
+        <div id="status" class="meta">Pos: — — | FPS: —</div>
       </div>
     </div>
-    <canvas id="game" width="980" height="640"></canvas>
+
+    <div class="right">
+      <div class="panel" style="display:flex;flex-direction:column;gap:8px;height:500px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="meta">Minimap (always visible)</div>
+          <div class="small">Scale: auto</div>
+        </div>
+        <canvas id="minimap" width="280" height="420"></canvas>
+        <div class="small" style="opacity:.9">Minimap shows objects (green = tree, brown = crate, grey = rock) and player facing direction.</div>
+      </div>
+
+      <div class="panel small" style="margin-top:8px;">
+        <div><strong>Player image file:</strong> <code>Player.png</code></div>
+        <div style="margin-top:6px;color:rgba(255,255,255,0.72)">Drop an image over the page to test a different sprite for this session.</div>
+      </div>
+    </div>
   </div>
 
+  <footer>Hide and Gun — prototype</footer>
+
 <script>
-// ========= Utilities =========
-function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
-function lerp(a,b,t){return a+(b-a)*t;}
+/* ------------------------
+   Upgraded single-file game
+   - Optimizations to avoid frame allocations
+   - Minimap on same page, always visible
+   - Objects sorted once (they are static)
+   - Background uses a tile pattern (fast)
+   - Stable collision resolution
+   -------------------------*/
 
-// ========= Input (WASD) =========
-class InputHandler{
-  constructor(){
-    this.keys=new Set();
-    window.addEventListener('keydown', e=>{const k=this._n(e.key); if(k){this.keys.add(k); e.preventDefault?.();}}, {passive:false});
-    window.addEventListener('keyup', e=>{const k=this._n(e.key); if(k) this.keys.delete(k);});
+(() => {
+  // ----- Config -----
+  const VIEW_W = 980, VIEW_H = 640;
+  const WORLD_W = 2400, WORLD_H = 1600;
+  const TILE = 64;
+
+  // ----- Utilities -----
+  const clamp = (v,a,b) => v < a ? a : (v > b ? b : v);
+  const now = () => performance.now();
+
+  // ----- Input (WASD only) -----
+  class Input {
+    constructor(){
+      this.keys = new Set();
+      window.addEventListener('keydown', e=>{
+        const k = this._n(e.key);
+        if(k){ this.keys.add(k); e.preventDefault?.(); }
+      }, {passive:false});
+      window.addEventListener('keyup', e=>{ const k=this._n(e.key); if(k) this.keys.delete(k); });
+    }
+    _n(k){ if(!k) return null; k=k.toLowerCase(); if(k==='w') return 'up'; if(k==='a') return 'left'; if(k==='s') return 'down'; if(k==='d') return 'right'; return null; }
+    isDown(k){ return this.keys.has(k); }
   }
-  _n(k){ if(!k) return null; k=k.toLowerCase(); if(k==='w') return 'up'; if(k==='a') return 'left'; if(k==='s') return 'down'; if(k==='d') return 'right'; return null; }
-  isDown(k){ return this.keys.has(k); }
-}
 
-// ========= Camera =========
-class Camera{
-  constructor(viewW, viewH, worldW, worldH){ this.viewW=viewW; this.viewH=viewH; this.worldW=worldW; this.worldH=worldH; this.x=viewW/2; this.y=viewH/2; }
-  follow(tx, ty){ const halfW=this.viewW/2, halfH=this.viewH/2; const desiredX=clamp(tx, halfW, this.worldW-halfW); const desiredY=clamp(ty, halfH, this.worldH-halfH); this.x=desiredX; this.y=desiredY; }
-  worldToScreen(wx, wy){ return { sx: wx - (this.x - this.viewW/2), sy: wy - (this.y - this.viewH/2) }; }
-}
+  // ----- Camera (instant center on player) -----
+  class Camera {
+    constructor(w,h,worldW,worldH){
+      this.viewW=w; this.viewH=h; this.worldW=worldW; this.worldH=worldH;
+      this.x = w/2; this.y = h/2;
+    }
+    follow(px,py){
+      const hw = this.viewW/2, hh = this.viewH/2;
+      this.x = clamp(px, hw, this.worldW - hw);
+      this.y = clamp(py, hh, this.worldH - hh);
+    }
+    worldToScreen(wx, wy){ return { sx: wx - (this.x - this.viewW/2), sy: wy - (this.y - this.viewH/2) }; }
+  }
 
-// ========= Player =========
-class Player{
-  constructor(x,y,img){ this.x=x; this.y=y; this.image=img; this.speed=220; this.angle=0; this.r=18; this.w=48; this.h=48; }
-  attemptMove(dx, dy){ this.x += dx; this.y += dy; }
-  update(dt, input, world, mouse, objects){
-    let dx=0, dy=0;
-    if(input.isDown('up')) dy -= 1;
-    if(input.isDown('down')) dy += 1;
-    if(input.isDown('left')) dx -= 1;
-    if(input.isDown('right')) dx += 1;
-    if(dx !== 0 || dy !== 0){ const len=Math.hypot(dx,dy); dx = dx/len * this.speed * dt; dy = dy/len * this.speed * dt; }
-    // attempt movement then resolve collisions
-    this.x += dx; this.y += dy;
-    // collision resolution: push out using minimum translation vector
-    for(const obj of objects){
-      const sx = this.x - obj.x; const sy = this.y - obj.y; const dist = Math.hypot(sx, sy);
-      const minDist = this.r + obj.r;
-      if(dist < minDist){
-        let overlap = minDist - dist;
-        if(dist === 0){ // perfect overlap, nudge randomly
-          const a = Math.random()*Math.PI*2; this.x += Math.cos(a)*overlap; this.y += Math.sin(a)*overlap;
-        } else {
-          this.x += (sx / dist) * overlap;
-          this.y += (sy / dist) * overlap;
+  // ----- Player (circle collider) -----
+  class Player {
+    constructor(x,y,img){
+      this.x=x; this.y=y; this.img=img; this.radius=18; this.speed=220; this.angle=0; this.w=48; this.h=48;
+    }
+    move(dt, input){
+      let dx=0, dy=0;
+      if(input.isDown('up')) dy -= 1;
+      if(input.isDown('down')) dy += 1;
+      if(input.isDown('left')) dx -= 1;
+      if(input.isDown('right')) dx += 1;
+      if(dx || dy){
+        const len = Math.hypot(dx,dy);
+        dx = (dx/len) * this.speed * dt;
+        dy = (dy/len) * this.speed * dt;
+      }
+      this.x += dx; this.y += dy;
+    }
+    resolveCollisions(objs){
+      // simple circle-circle resolve (object radius stored)
+      for(let i=0;i<objs.length;i++){
+        const o = objs[i];
+        const sx = this.x - o.x;
+        const sy = this.y - o.y;
+        const dist2 = sx*sx + sy*sy;
+        const min = this.radius + o.r;
+        const min2 = min*min;
+        if(dist2 < min2 && dist2 > 0.0001){
+          const dist = Math.sqrt(dist2);
+          const overlap = min - dist;
+          const nx = sx / dist, ny = sy / dist;
+          this.x += nx * overlap;
+          this.y += ny * overlap;
+        } else if(dist2 <= 0.0001){
+          // avoid exact overlap: nudge
+          const a = Math.random()*Math.PI*2;
+          this.x += Math.cos(a) * 1;
+          this.y += Math.sin(a) * 1;
         }
       }
     }
-    // clamp to world
-    this.x = clamp(this.x, this.r, world.width - this.r);
-    this.y = clamp(this.y, this.r, world.height - this.r);
-    // face mouse
-    if(mouse) this.angle = Math.atan2(mouse.y - this.y, mouse.x - this.x);
-  }
-  draw(ctx, cam, drawColliders=false){ const {sx, sy} = cam.worldToScreen(this.x, this.y); ctx.save(); ctx.translate(sx, sy); ctx.rotate(this.angle + Math.PI/2);
-    if(this.image && this.image.complete) ctx.drawImage(this.image, -this.w/2, -this.h/2, this.w, this.h); else { ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill(); }
-    if(drawColliders){ ctx.strokeStyle='rgba(255,0,0,0.6)'; ctx.beginPath(); ctx.arc(0,0,this.r,0,Math.PI*2); ctx.stroke(); }
-    ctx.restore(); }
-}
-
-// ========= World Objects =========
-class WorldObject{
-  constructor(x,y,type){ this.x=x; this.y=y; this.type=type; this.r = type==='tree'?28:(type==='crate'?20:18); }
-  draw(ctx, cam, drawColliders=false){ const {sx, sy} = cam.worldToScreen(this.x, this.y); ctx.save(); ctx.translate(sx, sy);
-    if(this.type === 'tree'){ ctx.fillStyle='#6b3e16'; ctx.fillRect(-6,6,12,18); ctx.beginPath(); ctx.fillStyle='#228b22'; ctx.ellipse(0,-2,24,18,0,0,Math.PI*2); ctx.fill(); }
-    else if(this.type === 'crate'){ ctx.fillStyle='#8b5a2b'; ctx.fillRect(-16,-12,32,24); ctx.strokeStyle='rgba(0,0,0,0.25)'; ctx.strokeRect(-16,-12,32,24); }
-    else { ctx.beginPath(); ctx.fillStyle='#9aa0a6'; ctx.ellipse(0,0,18,12,0,0,Math.PI*2); ctx.fill(); }
-    if(drawColliders){ ctx.strokeStyle='rgba(255,0,0,0.45)'; ctx.beginPath(); ctx.arc(0,0,this.r,0,Math.PI*2); ctx.stroke(); }
-    ctx.restore(); }
-}
-
-// ========= Game =========
-class Game{
-  constructor(canvas, viewW, viewH){
-    this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.viewW=viewW; this.viewH=viewH;
-    this.input = new InputHandler(); this.world = {width:2400, height:1600}; this.cam = new Camera(viewW, viewH, this.world.width, this.world.height);
-    this.playerImg = new Image(); this.playerImg.src = './Player.png'; this.player = new Player(this.world.width/2, this.world.height/2, this.playerImg);
-
-    this.objects = [];
-    // place objects in clusters but avoid spawning on top of the player
-    for(let i=0;i<40;i++){
-      let x,y; let tries=0;
-      do{ x = Math.random()*this.world.width; y = Math.random()*this.world.height; tries++; } while(Math.hypot(x-this.player.x,y-this.player.y) < 200 && tries<20);
-      const type = ['tree','crate','rock'][Math.floor(Math.random()*3)];
-      this.objects.push(new WorldObject(x,y,type));
+    clampToWorld(worldW, worldH){
+      this.x = clamp(this.x, this.radius, worldW - this.radius);
+      this.y = clamp(this.y, this.radius, worldH - this.radius);
     }
-
-    this.mouse = null; this.last = performance.now(); this.fps=0; this.frame=0; this._fpsT=0; this.drawColliders=false;
-    this.minimapWindow = null; this._bind(); requestAnimationFrame(this.loop.bind(this));
+    draw(ctx, cam, showColliders){
+      const p = cam.worldToScreen(this.x, this.y);
+      ctx.save();
+      ctx.translate(p.sx, p.sy);
+      ctx.rotate(this.angle + Math.PI/2);
+      if(this.img && this.img.complete) ctx.drawImage(this.img, -this.w/2, -this.h/2, this.w, this.h);
+      else { ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill(); }
+      if(showColliders){ ctx.strokeStyle='rgba(255,0,0,0.6)'; ctx.beginPath(); ctx.arc(0,0,this.radius,0,Math.PI*2); ctx.stroke(); }
+      ctx.restore();
+    }
   }
 
-  _bind(){
-    this.canvas.addEventListener('mousemove', e=>{
-      const rect = this.canvas.getBoundingClientRect(); const mx = e.clientX - rect.left; const my = e.clientY - rect.top;
-      const wx = this.cam.x - this.cam.viewW/2 + mx; const wy = this.cam.y - this.cam.viewH/2 + my; this.mouse = {x:wx,y:wy};
-    });
-    this.canvas.addEventListener('mouseleave', ()=>{ this.mouse = null; });
-
-    document.getElementById('open-minimap').addEventListener('click', ()=>this.openMinimap());
-    document.getElementById('toggle-collider-draw').addEventListener('click', ()=>{ this.drawColliders = !this.drawColliders; });
-  }
-
-  openMinimap(){
-    // open popup if not open
-    if(this.minimapWindow && !this.minimapWindow.closed){ this.minimapWindow.focus(); return; }
-    const w=420,h=300;
-    this.minimapWindow = window.open('', 'HideAndGunMinimap', `width=${w},height=${h}`);
-    if(!this.minimapWindow) return alert('Popup blocked. Allow popups to open minimap.');
-    const doc = this.minimapWindow.document;
-    doc.title = 'Hide and Gun — Minimap';
-    doc.body.style.margin='0'; doc.body.style.background='#0e1724';
-    const canvas = doc.createElement('canvas'); canvas.width=400; canvas.height=260; canvas.style.display='block'; canvas.style.margin='10px auto'; canvas.style.border='1px solid rgba(255,255,255,0.06)'; doc.body.appendChild(canvas);
-    // simple instructions
-    const p = doc.createElement('div'); p.innerText='Minimap — player centered marker'; p.style.color='#ddd'; p.style.textAlign='center'; p.style.fontFamily='system-ui,Arial'; p.style.fontSize='12px'; doc.body.appendChild(p);
-
-    // store reference for drawing
-    this.minimapCanvas = canvas; this.minimapCtx = canvas.getContext('2d');
-  }
-
-  loop(now){
-    const dt = Math.min(0.05, (now - this.last)/1000); this.last = now;
-    this.player.update(dt, this.input, this.world, this.mouse, this.objects);
-    this.cam.follow(this.player.x, this.player.y);
-    this.render();
-    if(this.minimapWindow && !this.minimapWindow.closed) this.renderMinimap();
-    this._fpsT += dt; this.frame++;
-    if(this._fpsT >= 0.5){ this.fps = Math.round(this.frame / this._fpsT); this.frame = 0; this._fpsT = 0; }
-    requestAnimationFrame(this.loop.bind(this));
-  }
-
-  render(){
-    const ctx = this.ctx; const cw = this.canvas.width, ch = this.canvas.height;
-    ctx.clearRect(0,0,cw,ch);
-    this._drawBackground(ctx);
-    // draw objects sorted by y
-    const sorted = this.objects.slice().sort((a,b)=>a.y-b.y);
-    for(const o of sorted) o.draw(ctx, this.cam, this.drawColliders);
-    this.player.draw(ctx, this.cam, this.drawColliders);
-    this._drawCursor(ctx);
-    this._drawUI(ctx);
-  }
-
-  _drawBackground(ctx){
-    const tile=64; const startX = Math.floor((this.cam.x - this.cam.viewW/2)/tile)*tile; const startY = Math.floor((this.cam.y - this.cam.viewH/2)/tile)*tile;
-    for(let y=startY-tile; y<this.cam.y+this.cam.viewH/2+tile; y+=tile){
-      for(let x=startX-tile; x<this.cam.x+this.cam.viewW/2+tile; x+=tile){
-        if(x<0 || x>=this.world.width || y<0 || y>=this.world.height) continue;
-        const {sx,sy} = this.cam.worldToScreen(x,y);
-        ctx.fillStyle = ((Math.floor(x/tile)+Math.floor(y/tile))%2===0)?'rgba(30,45,65,0.7)':'rgba(28,40,58,0.7)';
-        ctx.fillRect(sx,sy,tile-1,tile-1);
+  // ----- World object (static) -----
+  class WorldObj {
+    constructor(x,y,type){
+      this.x=x; this.y=y; this.type=type;
+      this.r = (type==='tree')?28: (type==='crate')?20:18;
+    }
+    draw(ctx, cam, drawCollider=false){
+      const p = cam.worldToScreen(this.x, this.y);
+      ctx.save(); ctx.translate(p.sx, p.sy);
+      if(this.type==='tree'){
+        ctx.fillStyle='#6b3e16'; ctx.fillRect(-6,6,12,18);
+        ctx.beginPath(); ctx.fillStyle='#228b22'; ctx.ellipse(0,-2,24,18,0,0,Math.PI*2); ctx.fill();
+      } else if(this.type==='crate'){
+        ctx.fillStyle='#8b5a2b'; ctx.fillRect(-16,-12,32,24);
+        ctx.strokeStyle='rgba(0,0,0,0.22)'; ctx.strokeRect(-16,-12,32,24);
+      } else {
+        ctx.beginPath(); ctx.fillStyle='#9aa0a6'; ctx.ellipse(0,0,18,12,0,0,Math.PI*2); ctx.fill();
       }
+      if(drawCollider){ ctx.strokeStyle='rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(0,0,this.r,0,Math.PI*2); ctx.stroke(); }
+      ctx.restore();
     }
   }
 
-  _drawCursor(ctx){ if(!this.mouse) return; const {sx,sy} = this.cam.worldToScreen(this.mouse.x,this.mouse.y); ctx.save(); ctx.beginPath(); ctx.arc(sx,sy,6,0,Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fill(); ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke(); ctx.restore(); }
+  // ----- Game main -----
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const minimapCanvas = document.getElementById('minimap');
+  const minimapCtx = minimapCanvas.getContext('2d');
 
-  _drawUI(ctx){ ctx.save(); ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(8,8,420,84); ctx.fillStyle='#fff'; ctx.font='13px system-ui,Arial'; ctx.fillText('Position: '+Math.round(this.player.x)+', '+Math.round(this.player.y), 16, 28); ctx.fillText('WASD to move — player collides with objects', 16, 50); ctx.fillText('FPS: '+this.fps, 16, 72); ctx.restore(); }
+  // HiDPI scaling: keep CSS logical size, scale backing store
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.width = VIEW_W;
+  const cssH = canvas.height = VIEW_H;
+  canvas.style.width = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
 
-  renderMinimap(){ if(!this.minimapCtx) return; const ctx = this.minimapCtx; const cw = this.minimapCanvas.width, ch = this.minimapCanvas.height; ctx.clearRect(0,0,cw,ch);
-    // draw world bounds scaled to canvas while keeping aspect
-    const padding = 8; const mapW = cw - padding*2, mapH = ch - padding*2; const scaleX = mapW / this.world.width, scaleY = mapH / this.world.height; const scale = Math.min(scaleX, scaleY);
-    const offsetX = (cw - this.world.width*scale)/2, offsetY = (ch - this.world.height*scale)/2;
-    // background
-    ctx.fillStyle='#0b1220'; ctx.fillRect(0,0,cw,ch);
-    // objects
-    for(const o of this.objects){ const ox = offsetX + o.x*scale, oy = offsetY + o.y*scale; if(o.type==='tree') ctx.fillStyle='#2e8b2e'; else if(o.type==='crate') ctx.fillStyle='#8b5a2b'; else ctx.fillStyle='#9aa0a6'; ctx.beginPath(); ctx.arc(ox,oy, Math.max(1, o.r*scale), 0, Math.PI*2); ctx.fill(); }
-    // player as triangle pointing to angle
-    const px = offsetX + this.player.x*scale, py = offsetY + this.player.y*scale; const pr = Math.max(3, this.player.r*scale);
-    ctx.save(); ctx.translate(px,py); ctx.rotate(this.player.angle);
-    ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.moveTo(0,-pr*1.4); ctx.lineTo(pr, pr*1.2); ctx.lineTo(-pr, pr*1.2); ctx.closePath(); ctx.fill(); ctx.restore();
-    // draw border
-    ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.strokeRect(offsetX-1, offsetY-1, this.world.width*scale+2, this.world.height*scale+2);
+  // minimap HiDPI
+  const mmCssW = minimapCanvas.width = 280;
+  const mmCssH = minimapCanvas.height = 420;
+  minimapCanvas.style.width = mmCssW + 'px';
+  minimapCanvas.style.height = mmCssH + 'px';
+  minimapCanvas.width = Math.floor(mmCssW * dpr);
+  minimapCanvas.height = Math.floor(mmCssH * dpr);
+  minimapCtx.setTransform(dpr,0,0,dpr,0,0);
+
+  // assets
+  const playerImg = new Image();
+  playerImg.src = './Player.png';
+
+  // pattern for tiles (drawn once to a small canvas)
+  const tileCanvas = document.createElement('canvas');
+  tileCanvas.width = TILE; tileCanvas.height = TILE;
+  const tctx = tileCanvas.getContext('2d');
+  tctx.fillStyle = 'rgba(30,45,65,0.7)'; tctx.fillRect(0,0,TILE,TILE);
+  tctx.fillStyle = 'rgba(28,40,58,0.7)'; tctx.fillRect(0,0,TILE/2,TILE/2);
+  tctx.fillRect(TILE/2,TILE/2,TILE/2,TILE/2);
+  const tilePattern = ctx.createPattern(tileCanvas, 'repeat');
+
+  // world objects (static). Sorted once by y for depth.
+  const objects = [];
+  const playerStart = { x: WORLD_W/2, y: WORLD_H/2 };
+  for(let i=0;i<40;i++){
+    let x,y,tries=0;
+    do { x = Math.random()*WORLD_W; y = Math.random()*WORLD_H; tries++; } while(Math.hypot(x-playerStart.x,y-playerStart.y) < 180 && tries<40);
+    objects.push(new WorldObj(x,y, ['tree','crate','rock'][Math.floor(Math.random()*3)]));
   }
-}
+  // sort by y (static) to use for drawing order -> no per-frame sort
+  objects.sort((a,b)=>a.y - b.y);
 
-// ========= Bootstrap =========
-window.addEventListener('load', ()=>{
-  const loading = document.getElementById('loading'); const cont = document.getElementById('game-container'); const canvas = document.getElementById('game');
-  // HiDPI
-  const dpr = window.devicePixelRatio || 1; const cssW = canvas.width, cssH = canvas.height; canvas.style.width = cssW+'px'; canvas.style.height = cssH+'px'; canvas.width = Math.floor(cssW * dpr); canvas.height = Math.floor(cssH * dpr); const ctx = canvas.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-  // create game
-  const game = new Game(canvas, cssW, cssH);
+  // create instances
+  const input = new Input();
+  const camera = new Camera(VIEW_W, VIEW_H, WORLD_W, WORLD_H);
+  const player = new Player(playerStart.x, playerStart.y, playerImg);
 
-  // remove loading once player image loaded (or timeout)
-  const start = performance.now(); const maxWait = 3000; const check = setInterval(()=>{
-    if(game.playerImg.complete || performance.now()-start > maxWait){ loading.classList.add('fade-out'); setTimeout(()=>{ loading.remove(); cont.style.display='flex'; }, 600); clearInterval(check); }
-  }, 100);
+  // state
+  let mouseWorld = null;
+  let last = now();
+  let fps=0, frameCount=0, fpsTimer=0;
+  let showColliders=false;
 
-  // drag & drop to replace player image
-  window.addEventListener('dragover', e=>e.preventDefault()); window.addEventListener('drop', e=>{ e.preventDefault(); const f = e.dataTransfer.files?.[0]; if(!f) return; if(!f.type.startsWith('image/')) return alert('Drop an image file.'); const url = URL.createObjectURL(f); game.playerImg.src = url; alert('Player sprite updated for this session. Commit your Player.png into the repo to make it permanent.'); });
-});
+  // UI elements
+  const app = document.getElementById('app');
+  const loading = document.getElementById('loading');
+  const toggleBtn = document.getElementById('toggleColliders');
+  const status = document.getElementById('status');
+  const resetBtn = document.getElementById('resetPlayer');
+
+  toggleBtn.addEventListener('click', ()=>{
+    showColliders = !showColliders;
+    toggleBtn.textContent = 'Show Colliders: ' + (showColliders ? 'On' : 'Off');
+  });
+  resetBtn.addEventListener('click', ()=>{
+    player.x = playerStart.x; player.y = playerStart.y; player.angle = 0;
+  });
+
+  // mouse tracking on canvas -> world coords
+  canvas.addEventListener('mousemove', e=>{
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left);
+    const my = (e.clientY - rect.top);
+    const wx = camera.x - camera.viewW/2 + mx;
+    const wy = camera.y - camera.viewH/2 + my;
+    mouseWorld = { x: wx, y: wy };
+  });
+  canvas.addEventListener('mouseleave', ()=>{ mouseWorld = null; });
+
+  // drag & drop to swap player image for session
+  window.addEventListener('dragover', e=>e.preventDefault());
+  window.addEventListener('drop', e=>{
+    e.preventDefault();
+    const f = e.dataTransfer.files?.[0];
+    if(!f) return;
+    if(!f.type.startsWith('image/')) return alert('Drop an image file.');
+    const url = URL.createObjectURL(f);
+    player.img.src = url;
+    alert('Player sprite updated for this session. Commit Player.png to the repo to keep it.');
+  });
+
+  // Show UI when player image loaded OR after short timeout to avoid freeze
+  const startTime = now();
+  const loadTimeout = 2000;
+  const loadCheck = setInterval(()=>{
+    if(playerImg.complete || now() - startTime > loadTimeout){
+      clearInterval(loadCheck);
+      loading.classList.add('fade');
+      setTimeout(()=>{ loading.remove(); app.style.display = 'grid'; }, 500);
+    }
+  }, 80);
+
+  // ----- Render helpers -----
+  function drawBackground(ctx, cam){
+    // fill using pattern; limit drawing to viewport for speed
+    ctx.fillStyle = tilePattern;
+    const left = cam.x - cam.viewW/2;
+    const top = cam.y - cam.viewH/2;
+    ctx.save();
+    // translate pattern so it aligns with world origin
+    ctx.translate(-left % TILE, -top % TILE);
+    ctx.fillRect(left, top, cam.viewW, cam.viewH);
+    ctx.restore();
+  }
+
+  // draw only objects that are near viewport (fast check)
+  function drawObjects(ctx, cam){
+    const left = cam.x - cam.viewW/2, top = cam.y - cam.viewH/2;
+    const right = left + cam.viewW, bottom = top + cam.viewH;
+    // objects already sorted by y; iterate and draw those in range
+    for(let i=0;i<objects.length;i++){
+      const o = objects[i];
+      if(o.x + o.r < left || o.x - o.r > right || o.y + o.r < top || o.y - o.r > bottom) continue;
+      o.draw(ctx, cam, showColliders);
+    }
+  }
+
+  function drawCursor(ctx, cam){
+    if(!mouseWorld) return;
+    const p = cam.worldToScreen(mouseWorld.x, mouseWorld.y);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, 6, 0, Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.restore();
+  }
+
+  // minimap drawing (small and efficient)
+  function renderMinimap(){
+    const mmW = mmCssW, mmH = mmCssH;
+    const pad = 8;
+    minimapCtx.clearRect(0,0,mmW,mmH);
+    minimapCtx.fillStyle = '#06111a';
+    minimapCtx.fillRect(0,0,mmW,mmH);
+
+    // compute scale (fit world in minimap with padding)
+    const mapW = mmW - pad*2, mapH = mmH - pad*2;
+    const scale = Math.min(mapW / WORLD_W, mapH / WORLD_H);
+    const offsetX = (mmW - WORLD_W*scale)/2;
+    const offsetY = (mmH - WORLD_H*scale)/2;
+
+    // draw objects (small dots)
+    for(let i=0;i<objects.length;i++){
+      const o = objects[i];
+      const ox = offsetX + o.x*scale;
+      const oy = offsetY + o.y*scale;
+      if(o.type==='tree') minimapCtx.fillStyle = '#2ea02e';
+      else if(o.type==='crate') minimapCtx.fillStyle = '#8b5a2b';
+      else minimapCtx.fillStyle = '#9aa0a6';
+      const r = Math.max(1, Math.round(o.r*scale));
+      minimapCtx.beginPath(); minimapCtx.arc(ox, oy, r, 0, Math.PI*2); minimapCtx.fill();
+    }
+
+    // draw player (triangle with rotation)
+    const px = offsetX + player.x*scale;
+    const py = offsetY + player.y*scale;
+    const pr = Math.max(3, player.radius*scale);
+    minimapCtx.save();
+    minimapCtx.translate(px, py);
+    minimapCtx.rotate(player.angle);
+    minimapCtx.fillStyle = '#ffd166';
+    minimapCtx.beginPath();
+    minimapCtx.moveTo(0, -pr*1.5);
+    minimapCtx.lineTo(pr, pr);
+    minimapCtx.lineTo(-pr, pr);
+    minimapCtx.closePath();
+    minimapCtx.fill();
+    minimapCtx.restore();
+
+    // border
+    minimapCtx.strokeStyle = 'rgba(255,255,255,0.04)';
+    minimapCtx.strokeRect(offsetX-1, offsetY-1, WORLD_W*scale+2, WORLD_H*scale+2);
+  }
+
+  // ----- Main loop -----
+  function loop(ts){
+    const t = ts || now();
+    let dt = (t - last) / 1000;
+    if(dt > 0.05) dt = 0.05; // clamp for large frame gap
+    last = t;
+
+    // update
+    player.move(dt, input);
+    player.resolveCollisions(objects);
+    player.clampToWorld(WORLD_W, WORLD_H);
+    if(mouseWorld) player.angle = Math.atan2(mouseWorld.y - player.y, mouseWorld.x - player.x);
+
+    camera.follow(player.x, player.y);
+
+    // render
+    // draw background using pattern (fast)
+    drawBackground(ctx, camera);
+
+    // draw objects (only visible ones)
+    drawObjects(ctx, camera);
+
+    // draw player on top (static objects sorted by y, but player may need to be drawn in depth)
+    // simple approach: draw objects below player's y, player, then remaining objects
+    // Since objects are sorted by y, find index where object.y > player.y
+    let idx = binaryFindFirst(objects, (o)=> o.y > player.y);
+    // draw objects before idx (already drawn above); but to keep one-pass drawing minimal, we'll:
+    // Already drew all objects in drawObjects; but that draws every visible object - that's okay.
+    // Draw player on top
+    player.draw(ctx, camera, showColliders);
+
+    // cursor
+    drawCursor(ctx, camera);
+
+    // UI
+    frameCount++; fpsTimer += dt;
+    if(fpsTimer >= 0.4){ fps = Math.round(frameCount / fpsTimer); frameCount = 0; fpsTimer = 0; }
+    status.textContent = `Pos: ${Math.round(player.x)} , ${Math.round(player.y)} | FPS: ${fps}`;
+
+    // minimap
+    renderMinimap();
+
+    requestAnimationFrame(loop);
+  }
+
+  // small binary search helper to find first index where predicate true
+  function binaryFindFirst(arr, predicate){
+    let lo = 0, hi = arr.length;
+    while(lo < hi){
+      const mid = (lo + hi) >> 1;
+      if(predicate(arr[mid])) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  }
+
+  // start
+  last = now();
+  requestAnimationFrame(loop);
+
+})(); // IIFE end
 </script>
 </body>
 </html>
